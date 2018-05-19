@@ -12,6 +12,16 @@ pub struct MerkleTree {
     elements: Vec<Element>,
 }
 
+pub struct ExistenceProof {
+    merkle_path: Vec<AnchoredHash>,
+}
+
+struct AnchoredHash {
+    layer: usize,
+    index: usize,
+    hash: Hash,
+}
+
 impl MerkleTree {
     pub fn root_hash(&self) -> Option<&Hash> {
         self.layers.last().map(|hashes| &hashes[0])
@@ -59,6 +69,61 @@ impl MerkleTree {
         }
 
         return MerkleTree { layers, elements };
+    }
+
+    pub fn prove_existence(&self, index: usize) -> Option<ExistenceProof> {
+        let mut merkle_path = Vec::new();
+
+        let mut current_layer = 0;
+        let mut current_index = index;
+
+        // We start at the bottom of the tree and trace our way to its top,
+        // remembering all nodes which are required for existence verification.
+        while self.valid_coords(current_layer, current_index) {
+            let sibling_index = self.sibling_index(current_layer, current_index);
+            merkle_path.push(self.anchored_hash(current_layer, sibling_index));
+
+            current_layer += 1;
+            current_index /= 2;
+        }
+
+        // Path may be empty if the index was invalid, including the case of an empty tree.
+        if merkle_path.is_empty() {
+            return None;
+        }
+
+        // Drop the last element (root node). It is always added to the path,
+        // but it is not necessary for existence verification.
+        merkle_path.pop();
+
+        return Some(ExistenceProof { merkle_path });
+    }
+
+    fn valid_coords(&self, layer: usize, index: usize) -> bool {
+        (layer < self.layers.len()) && (index < self.layers[layer].len())
+    }
+
+    fn sibling_index(&self, layer: usize, index: usize) -> usize {
+        let layer_len = self.layers[layer].len();
+        // Last node of a layer with odd number of nodes does not have siblings.
+        // This node should be duplicated in the hash, return its own index.
+        if (layer_len % 2 != 0) && (index == layer_len - 1) {
+            return index;
+        }
+        // Left nodes have even indices, right nodes have odd ones. Swap them.
+        if index % 2 == 0 {
+            return index + 1;
+        } else {
+            return index - 1;
+        }
+    }
+
+    fn anchored_hash(&self, layer: usize, index: usize) -> AnchoredHash {
+        AnchoredHash {
+            layer,
+            index,
+            hash: self.layers[layer][index].clone(),
+        }
     }
 }
 
