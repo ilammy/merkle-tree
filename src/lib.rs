@@ -4,147 +4,75 @@
 // This file may be copied, distributed, and modified only
 // in accordance with the terms specified by the license.
 
-use std::cell::{RefCell};
-use std::rc::{Rc, Weak};
+type Element = Vec<u8>;
+type Hash = Vec<u8>;
 
 pub struct MerkleTree {
-    root: Option<Rc<RefCell<Node>>>,
+    layers: Vec<Vec<Hash>>,
+    elements: Vec<Element>,
 }
 
 impl MerkleTree {
-    pub fn root_hash(&self) -> Option<Vec<u8>> {
-        self.root.as_ref().map(|node| node.borrow().hash.clone())
+    pub fn root_hash(&self) -> Option<&Hash> {
+        self.layers.last().map(|hashes| &hashes[0])
     }
 
     pub fn make_empty() -> MerkleTree {
         MerkleTree {
-            root: None,
+            layers: vec![],
+            elements: vec![],
         }
     }
 
-    pub fn from<I: IntoIterator<Item=Vec<u8>>>(collection: I) -> MerkleTree {
+    pub fn from(elements: Vec<Element>) -> MerkleTree {
+        // Empty list is a special case. Deal with it here.
+        if elements.is_empty() {
+            return MerkleTree::make_empty();
+        }
+
         // In this case we can compute the tree faster than making an empty one and inserting
         // elements into it one by one. We make fewer intermediate modifications this way.
-        //
+        let mut layers: Vec<Vec<Hash>> = Vec::new();
+
         // Compute hashes for all elements of the collection and collect them into a list.
         // These nodes will be leaves of the tree, forming its bottom layer.
-        let mut layer: Vec<_> = collection.into_iter().map(|e| Node::new_value_leaf(e)).collect();
+        layers.push(elements.iter().map(|e| hash_value(e)).collect());
 
         // Now combine adjacent tree nodes, layer by layer, to compute intermediate hashes.
-        // Do this until we are left with a single node in our work list--the root one.
-        while layer.len() > 1 {
-            let next_layer = layer
+        // Do this until we are left with a single node--the root one.
+        while layers.last().unwrap().len() > 1 {
+            let next_layer = layers.last().unwrap()
+                .as_slice()
                 .chunks(2)
                 .map(|pair|
+                    // If the layer contains an odd number of elements then Merkle tree
+                    // duplicates the hash of the last element.
                     if pair.len() == 2 {
-                        Node::new_double_branch(&pair[0], &pair[1])
+                        combine_hashes(&pair[0], &pair[1])
                     } else {
-                        Node::new_single_branch(&pair[0])
+                        combine_hashes(&pair[0], &pair[0])
                     }
                 )
                 .collect();
 
-            layer = next_layer;
+            layers.push(next_layer);
         }
 
-        // Now we have the final layer with only one root node.
-        // It may also be empty if the collection is empty.
-        MerkleTree {
-            root: layer.first().map(|node| node.clone()),
-        }
+        return MerkleTree { layers, elements };
     }
 }
 
 // TODO: replace this with an actual hash function
 // TODO: make value generic
-fn hash_value(value: &Vec<u8>) -> Vec<u8> {
+fn hash_value(value: &Element) -> Hash {
     value.clone()
 }
 
-fn combine_hashes(lhs: &[u8], rhs: &[u8]) -> Vec<u8> {
+fn combine_hashes(lhs: &Hash, rhs: &Hash) -> Hash {
     let mut vec = Vec::new();
     vec.extend_from_slice(lhs);
     vec.extend_from_slice(rhs);
     return vec;
-}
-
-struct Node {
-    hash: Vec<u8>,
-    parent: Option<Weak<RefCell<Node>>>,
-    payload: Payload,
-}
-
-enum Payload {
-    LeafHashOnly,
-    LeafValue {
-        value: Vec<u8>,
-    },
-    BranchDouble {
-        lhs: Rc<RefCell<Node>>,
-        rhs: Rc<RefCell<Node>>,
-    },
-    BranchSingle {
-        lhs: Rc<RefCell<Node>>,
-    },
-}
-
-impl Node {
-    fn new_value_leaf(value: Vec<u8>) -> Rc<RefCell<Node>> {
-        Rc::new(RefCell::new(
-            Node {
-                hash: hash_value(&value),
-                parent: None,
-                payload: Payload::LeafValue {
-                    value: value,
-                },
-            }
-        ))
-    }
-
-    fn new_hash_leaf(hash: Vec<u8>) -> Rc<RefCell<Node>> {
-        Rc::new(RefCell::new(
-            Node {
-                hash: hash,
-                parent: None,
-                payload: Payload::LeafHashOnly,
-            }
-        ))
-    }
-
-    fn new_double_branch(lhs: &Rc<RefCell<Node>>, rhs: &Rc<RefCell<Node>>) -> Rc<RefCell<Node>> {
-        let node = Rc::new(RefCell::new(
-            Node {
-                hash: combine_hashes(&lhs.borrow().hash, &rhs.borrow().hash),
-                parent: None,
-                payload: Payload::BranchDouble {
-                    lhs: lhs.clone(),
-                    rhs: rhs.clone(),
-                },
-            }
-        ));
-
-        lhs.borrow_mut().parent = Some(Rc::downgrade(&node));
-        rhs.borrow_mut().parent = Some(Rc::downgrade(&node));
-
-        return node;
-    }
-
-    fn new_single_branch(lhs: &Rc<RefCell<Node>>) -> Rc<RefCell<Node>> {
-        let node = Rc::new(RefCell::new(
-            Node {
-                // Hash is duplicated for nodes with a single child.
-                hash: combine_hashes(&lhs.borrow().hash, &lhs.borrow().hash),
-                parent: None,
-                payload: Payload::BranchSingle {
-                    lhs: lhs.clone(),
-                },
-            }
-        ));
-
-        lhs.borrow_mut().parent = Some(Rc::downgrade(&node));
-
-        return node;
-    }
 }
 
 #[cfg(test)]
@@ -169,7 +97,7 @@ mod tests {
     fn from_list_one() {
         let tree = MerkleTree::from(vec![vec![1]]);
 
-        assert_eq!(tree.root_hash().unwrap(), vec![1]);
+        assert_eq!(tree.root_hash().unwrap(), &[1]);
     }
 
     #[test]
@@ -181,7 +109,7 @@ mod tests {
         // 1 2 3 4
         let tree = MerkleTree::from(vec![vec![1], vec![2], vec![3], vec![4]]);
 
-        assert_eq!(tree.root_hash().unwrap(), vec![1, 2, 3, 4]);
+        assert_eq!(tree.root_hash().unwrap(), &[1, 2, 3, 4]);
     }
 
     #[test]
@@ -195,6 +123,6 @@ mod tests {
         // 1 2 3 4 5
         let tree = MerkleTree::from(vec![vec![1], vec![2], vec![3], vec![4], vec![5]]);
 
-        assert_eq!(tree.root_hash().unwrap(), vec![1, 2, 3, 4, 5, 5, 5, 5]);
+        assert_eq!(tree.root_hash().unwrap(), &[1, 2, 3, 4, 5, 5, 5, 5]);
     }
 }
