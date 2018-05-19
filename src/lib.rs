@@ -127,6 +127,25 @@ impl MerkleTree {
     }
 }
 
+impl ExistenceProof {
+    pub fn is_valid(&self, element: &Element, root_hash: &Hash) -> bool {
+        let mut hash = hash_value(&element);
+
+        // Combine hashes from the Merkle path with the element hash.
+        // Pay attention to the direction (based on the saved index).
+        // In the end we should get the root hash.
+        for next in &self.merkle_path {
+            if next.index % 2 == 0 {
+                hash = combine_hashes(&next.hash, &hash);
+            } else {
+                hash = combine_hashes(&hash, &next.hash);
+            }
+        }
+
+        return &hash == root_hash;
+    }
+}
+
 // TODO: replace this with an actual hash function
 // TODO: make value generic
 fn hash_value(value: &Element) -> Hash {
