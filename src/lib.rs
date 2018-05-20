@@ -6,13 +6,15 @@
 
 extern crate sha2;
 
+use std::marker::PhantomData;
+
 use sha2::{Sha256, Digest};
 
 type Hash = Vec<u8>;
 
 pub struct MerkleTree<T> {
     layers: Vec<Vec<Hash>>,
-    elements: Vec<T>,
+    elements: PhantomData<T>,
 }
 
 pub struct ExistenceProof {
@@ -43,7 +45,7 @@ impl<T> MerkleTree<T> {
     pub fn make_empty() -> MerkleTree<T> {
         MerkleTree {
             layers: vec![],
-            elements: vec![],
+            elements: PhantomData,
         }
     }
 
@@ -51,20 +53,21 @@ impl<T> MerkleTree<T> {
         where I: IntoIterator<Item=T>,
               T: AsBytes
     {
-        let elements: Vec<_> = collection.into_iter().collect();
+        // Compute hashes for all elements of the collection and collect them into a list.
+        // These nodes will be leaves of the tree, forming its bottom layer.
+        let bottom_layer: Vec<_> = collection
+            .into_iter()
+            .map(|ref e| hash_value(e))
+            .collect();
 
         // Empty list is a special case. Deal with it here.
-        if elements.is_empty() {
+        if bottom_layer.is_empty() {
             return MerkleTree::make_empty();
         }
 
-        // In this case we can compute the tree faster than making an empty one and inserting
-        // elements into it one by one. We make fewer intermediate modifications this way.
-        let mut layers: Vec<Vec<Hash>> = Vec::new();
+        let mut layers = Vec::new();
 
-        // Compute hashes for all elements of the collection and collect them into a list.
-        // These nodes will be leaves of the tree, forming its bottom layer.
-        layers.push(elements.iter().map(|e| hash_value(e)).collect());
+        layers.push(bottom_layer);
 
         // Now combine adjacent tree nodes, layer by layer, to compute intermediate hashes.
         // Do this until we are left with a single node--the root one.
@@ -86,7 +89,7 @@ impl<T> MerkleTree<T> {
             layers.push(next_layer);
         }
 
-        return MerkleTree { layers, elements };
+        return MerkleTree { layers, elements: PhantomData };
     }
 
     pub fn prove_existence(&self, index: usize) -> Option<ExistenceProof> {
