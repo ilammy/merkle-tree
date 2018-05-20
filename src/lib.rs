@@ -31,10 +31,9 @@ impl<T> AsBytes for T where T: AsRef<[u8]> {
     }
 }
 
-struct AnchoredHash {
-    layer: usize,
-    index: usize,
-    hash: Hash,
+enum AnchoredHash {
+    Left(Hash),
+    Right(Hash),
 }
 
 impl<T> MerkleTree<T> {
@@ -140,10 +139,12 @@ impl<T> MerkleTree<T> {
     }
 
     fn anchored_hash(&self, layer: usize, index: usize) -> AnchoredHash {
-        AnchoredHash {
-            layer,
-            index,
-            hash: self.layers[layer][index].clone(),
+        let hash = self.layers[layer][index].clone();
+
+        if index % 2 == 0 {
+            AnchoredHash::Left(hash)
+        } else {
+            AnchoredHash::Right(hash)
         }
     }
 }
@@ -153,13 +154,15 @@ impl ExistenceProof {
         let mut hash = hash_value(element);
 
         // Combine hashes from the Merkle path with the element hash.
-        // Pay attention to the direction (based on the saved index).
         // In the end we should get the root hash.
         for next in &self.merkle_path {
-            if next.index % 2 == 0 {
-                hash = combine_hashes(&next.hash, &hash);
-            } else {
-                hash = combine_hashes(&hash, &next.hash);
+            match next {
+                AnchoredHash::Left(next_hash) => {
+                    hash = combine_hashes(&next_hash, &hash);
+                }
+                AnchoredHash::Right(next_hash) => {
+                    hash = combine_hashes(&hash, &next_hash);
+                }
             }
         }
 
