@@ -4,16 +4,29 @@
 // This file may be copied, distributed, and modified only
 // in accordance with the terms specified by the license.
 
-type Element = Vec<u8>;
+extern crate sha2;
+
+use sha2::{Sha256, Digest};
+
 type Hash = Vec<u8>;
 
-pub struct MerkleTree {
+pub struct MerkleTree<T> {
     layers: Vec<Vec<Hash>>,
-    elements: Vec<Element>,
+    elements: Vec<T>,
 }
 
 pub struct ExistenceProof {
     merkle_path: Vec<AnchoredHash>,
+}
+
+pub trait AsBytes {
+    fn as_bytes(&self) -> Vec<u8>;
+}
+
+impl<T> AsBytes for T where T: AsRef<[u8]> {
+    fn as_bytes(&self) -> Vec<u8> {
+        self.as_ref().to_vec()
+    }
 }
 
 struct AnchoredHash {
@@ -22,19 +35,24 @@ struct AnchoredHash {
     hash: Hash,
 }
 
-impl MerkleTree {
+impl<T> MerkleTree<T> {
     pub fn root_hash(&self) -> Option<&Hash> {
         self.layers.last().map(|hashes| &hashes[0])
     }
 
-    pub fn make_empty() -> MerkleTree {
+    pub fn make_empty() -> MerkleTree<T> {
         MerkleTree {
             layers: vec![],
             elements: vec![],
         }
     }
 
-    pub fn from(elements: Vec<Element>) -> MerkleTree {
+    pub fn from<I>(collection: I) -> MerkleTree<T>
+        where I: IntoIterator<Item=T>,
+              T: AsBytes
+    {
+        let elements: Vec<_> = collection.into_iter().collect();
+
         // Empty list is a special case. Deal with it here.
         if elements.is_empty() {
             return MerkleTree::make_empty();
@@ -128,8 +146,8 @@ impl MerkleTree {
 }
 
 impl ExistenceProof {
-    pub fn is_valid(&self, element: &Element, root_hash: &Hash) -> bool {
-        let mut hash = hash_value(&element);
+    pub fn is_valid<T: AsBytes>(&self, element: &T, root_hash: &Hash) -> bool {
+        let mut hash = hash_value(element);
 
         // Combine hashes from the Merkle path with the element hash.
         // Pay attention to the direction (based on the saved index).
@@ -146,42 +164,52 @@ impl ExistenceProof {
     }
 }
 
-// TODO: replace this with an actual hash function
-// TODO: make value generic
-fn hash_value(value: &Element) -> Hash {
-    value.clone()
+fn hash_value<T: AsBytes>(value: &T) -> Hash {
+    let mut hasher = Sha256::default();
+    hasher.input(value.as_bytes().as_slice());
+    return hasher.result().to_vec();
 }
 
 fn combine_hashes(lhs: &Hash, rhs: &Hash) -> Hash {
-    let mut vec = Vec::new();
-    vec.extend_from_slice(lhs);
-    vec.extend_from_slice(rhs);
-    return vec;
+    let mut hasher = Sha256::default();
+    hasher.input(lhs);
+    hasher.input(rhs);
+    return hasher.result().to_vec();
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn as_hex_str(bytes: &[u8]) -> String {
+        bytes.iter()
+             .map(|byte| format!("{:02x}", byte))
+             .collect()
+    }
+
     #[test]
     fn empty_tree() {
-        let tree = MerkleTree::make_empty();
+        let tree = MerkleTree::<&[u8]>::make_empty();
 
         assert_eq!(tree.root_hash(), None);
     }
 
     #[test]
     fn from_list_empty() {
-        let tree = MerkleTree::from(vec![]);
+        let tree = MerkleTree::from(&[] as &[&[u8]]);
 
         assert_eq!(tree.root_hash(), None);
     }
 
     #[test]
     fn from_list_one() {
-        let tree = MerkleTree::from(vec![vec![1]]);
+        // .
+        // |
+        // 1
+        let tree = MerkleTree::from(&[b"1"]);
 
-        assert_eq!(tree.root_hash().unwrap(), &[1]);
+        assert_eq!(as_hex_str(tree.root_hash().unwrap()),
+            "6b86b273ff34fce19d6b804eff5a3f5747ada4eaa22f1d49c01e52ddb7875b4b");
     }
 
     #[test]
@@ -191,9 +219,10 @@ mod tests {
         //  .   .
         // / \ / \
         // 1 2 3 4
-        let tree = MerkleTree::from(vec![vec![1], vec![2], vec![3], vec![4]]);
+        let tree = MerkleTree::from(&[b"1", b"2", b"3", b"4"]);
 
-        assert_eq!(tree.root_hash().unwrap(), &[1, 2, 3, 4]);
+        assert_eq!(as_hex_str(tree.root_hash().unwrap()),
+            "cd53a2ce68e6476c29512ea53c395c7f5d8fbcb4614d89298db14e2a5bdb5456");
     }
 
     #[test]
@@ -205,45 +234,46 @@ mod tests {
         //  .   .   :
         // / \ / \ /
         // 1 2 3 4 5
-        let tree = MerkleTree::from(vec![vec![1], vec![2], vec![3], vec![4], vec![5]]);
+        let tree = MerkleTree::from(&[b"1", b"2", b"3", b"4", b"5"]);
 
-        assert_eq!(tree.root_hash().unwrap(), &[1, 2, 3, 4, 5, 5, 5, 5]);
+        assert_eq!(as_hex_str(tree.root_hash().unwrap()),
+            "0abb51d233d9b6172ff6fcb56b4ef172f550da4cb15aa328ebf43751288b8011");
     }
 
     #[test]
     fn validate_one() {
-        let tree = MerkleTree::from(vec![vec![1]]);
-
+        let tree = MerkleTree::from(&[b"1"]);
         let root_hash = tree.root_hash().expect("root hash");
+
         let proof = tree.prove_existence(0).expect("existence proof");
 
-        assert!(proof.is_valid(&vec![1], &root_hash));
+        assert!(proof.is_valid(b"1", &root_hash));
     }
 
     #[test]
     fn validate_multiple() {
-        let elements: Vec<_> = (0..19).map(|i| vec![i]).collect();
+        let elements = &[b"1", b"2", b"3", b"4", b"5", b"6", b"7", b"8", b"9", b"A", b"B"];
 
-        let tree = MerkleTree::from(elements.clone());
+        let tree = MerkleTree::from(&elements[..]);
         let root_hash = tree.root_hash().expect("root hash");
 
-        for index in 0..19 {
+        for (index, element) in elements.iter().enumerate() {
             let proof = tree.prove_existence(index).expect("existence proof");
 
-            assert!(proof.is_valid(&elements[index], &root_hash));
+            assert!(proof.is_valid(element, &root_hash));
         }
     }
 
     #[test]
     fn empty_tree_has_no_root() {
-        let tree = MerkleTree::make_empty();
+        let tree = MerkleTree::<&[u8]>::make_empty();
 
         assert!(tree.root_hash().is_none());
     }
 
     #[test]
     fn invalid_indices_have_no_proofs() {
-        let tree = MerkleTree::from(vec![vec![1], vec![2]]);
+        let tree = MerkleTree::from(&[b"A", b"B"]);
 
         assert!(tree.prove_existence(2).is_none());
         assert!(tree.prove_existence(9000).is_none());
