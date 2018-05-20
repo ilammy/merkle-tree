@@ -4,13 +4,12 @@
 // This file may be copied, distributed, and modified only
 // in accordance with the terms specified by the license.
 
-extern crate sha2;
+pub trait AsBytes {
+    fn as_bytes(&self) -> Vec<u8>;
+}
 
-pub use bytes::AsBytes;
-pub use tree::MerkleTree;
-pub use proof::ExistenceProof;
-
-mod bytes;
-mod hash;
-mod proof;
-mod tree;
+impl<T> AsBytes for T where T: AsRef<[u8]> {
+    fn as_bytes(&self) -> Vec<u8> {
+        self.as_ref().to_vec()
+    }
+}
