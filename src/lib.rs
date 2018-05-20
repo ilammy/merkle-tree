@@ -209,4 +209,43 @@ mod tests {
 
         assert_eq!(tree.root_hash().unwrap(), &[1, 2, 3, 4, 5, 5, 5, 5]);
     }
+
+    #[test]
+    fn validate_one() {
+        let tree = MerkleTree::from(vec![vec![1]]);
+
+        let root_hash = tree.root_hash().expect("root hash");
+        let proof = tree.prove_existence(0).expect("existence proof");
+
+        assert!(proof.is_valid(&vec![1], &root_hash));
+    }
+
+    #[test]
+    fn validate_multiple() {
+        let elements: Vec<_> = (0..19).map(|i| vec![i]).collect();
+
+        let tree = MerkleTree::from(elements.clone());
+        let root_hash = tree.root_hash().expect("root hash");
+
+        for index in 0..19 {
+            let proof = tree.prove_existence(index).expect("existence proof");
+
+            assert!(proof.is_valid(&elements[index], &root_hash));
+        }
+    }
+
+    #[test]
+    fn empty_tree_has_no_root() {
+        let tree = MerkleTree::make_empty();
+
+        assert!(tree.root_hash().is_none());
+    }
+
+    #[test]
+    fn invalid_indices_have_no_proofs() {
+        let tree = MerkleTree::from(vec![vec![1], vec![2]]);
+
+        assert!(tree.prove_existence(2).is_none());
+        assert!(tree.prove_existence(9000).is_none());
+    }
 }
